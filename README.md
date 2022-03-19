@@ -1,5 +1,7 @@
 # JointFormer
 
+This repository is based on the SemGCN repository.
+
 ## Trained weights
 
 Trained weights for the Jointformer on CPN keypoints can be found [here](https://drive.google.com/file/d/1NEgtjHmgS8YZtRX2MObLEo0oRgSDS5Tg/view?usp=sharing). The parameters we used to train these weights were:
