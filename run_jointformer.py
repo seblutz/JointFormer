@@ -176,27 +176,7 @@ def train_worker(rank, addr, port, args):
 
     p_dropout = args.dropout
     adj = adj_mx_from_skeleton(dataset.skeleton())
-    # import matplotlib.pyplot as plt
-    # from mpl_toolkits.axes_grid1 import AxesGrid
-    # fig = plt.figure(figsize=(5, 5))
-    # attn = adj
-    # attn = attn - torch.min(attn)
-    # attn = attn / torch.max(attn)
-    # attn = attn.cpu().numpy()
-            
-    # ax = plt.subplot(1, 1, 1)
-    # im = ax.imshow(attn, vmin=0, vmax=1)
-
-    # plt.savefig('lul.png')
-
-    # import pdb
-    # pdb.set_trace()
     attn_mask = adj.unsqueeze(0).cuda() if args.joint_mask else None
-    # model_pos = SemGCN(adj, args.hid_dim, num_layers=args.num_layers, p_dropout=p_dropout,
-    #                    nodes_group=dataset.skeleton().joints_group() if args.non_local else None).cuda()
-    # model_pos = LiftFormer(16, 2, t_nlayers=args.num_layers, dropout=p_dropout, t_nhid=args.hid_dim, intermediate=args.intermediate, 
-    #                        spatial_encoding=args.spatial_encoding, conv_enc=args.conv_enc, conv_dec=args.conv_dec, attn_mask=attn_mask,
-    #                        pred_dropout=args.pred_dropout, use_images=use_images).cuda()
     model_pos = JointTransformer(num_joints_in=17, n_layers=args.num_layers, encoder_dropout=p_dropout, d_model=args.hid_dim, intermediate=args.intermediate,
                             spatial_encoding=args.spatial_encoding, pred_dropout=args.pred_dropout, embedding_type=args.embedding_type, 
                             adj=adj, error_prediction=not args.no_error_prediction, d_inner=args.d_inner, n_head=8).cuda()
@@ -207,7 +187,6 @@ def train_worker(rank, addr, port, args):
         print("==> Total parameters: {:.2f}M".format(sum(p.numel() for p in model_pos.parameters()) / 1000000.0))
 
     criterion = nn.MSELoss(reduction='mean').cuda()
-    # optimizer = torch.optim.Adam(model_pos.parameters(), lr=args.lr)
     optimizer = torch.optim.AdamW(model_pos.parameters(), lr=args.lr)
 
     # Optionally resume from a checkpoint
@@ -266,10 +245,8 @@ def train_worker(rank, addr, port, args):
             valid_loader = DataLoader(PoseGenerator(poses_valid, poses_valid_2d, actions_valid),
                                       batch_size=args.batch_size, shuffle=False,
                                       num_workers=args.num_workers, pin_memory=True)
-            #error1, error2 = evaluate(valid_loader, model_pos, intermediate=args.intermediate)
 
             error1, error2 = evaluate(valid_loader, model_pos, intermediate=args.intermediate, ttda=True, kps_left=kps_left, kps_right=kps_right, joints_left=joints_left, joints_right=joints_right)
-            # errors_p1[i], errors_p2[i] = evaluate(valid_loader, model_pos, intermediate=args.intermediate)
             if args.intermediate:
                 errors_p1[i] = error1[-1].avg
                 errors_p2[i] = error2[-1].avg
@@ -280,12 +257,7 @@ def train_worker(rank, addr, port, args):
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d-%H:%M:%S")
         scores_dict_p1 = OrderedDict(zip(score_keys, [timestamp, args.evaluate, *errors_p1, np.mean(errors_p1).item()]))
         scores_dict_p2 = OrderedDict(zip(score_keys, [timestamp, args.evaluate, *errors_p2, np.mean(errors_p2).item()]))
-        # scores_dict_p1['Avg'] = np.mean(errors_p1).item()
-        # scores_dict_p1['Checkpoint'] = args.checkpoint
 
-        # scores_dict_p1 = OrderedDict(zip(score_keys, [args.evaluate, *errors_p2, np.mean(errors_p2).item()]))
-        # scores_dict_p2['Avg'] = np.mean(errors_p2).item()
-        # scores_dict_p2['Checkpoint'] = args.checkpoint
         result_file_exists = os.path.isfile('results.csv')
         with open('results.csv', 'a') as f:
             writer_object = DictWriter(f, fieldnames = scores_dict_p1.keys())
@@ -313,9 +285,7 @@ def train_worker(rank, addr, port, args):
         valid_loader = DataLoader(PoseGenerator(poses_valid, poses_valid_2d, actions_valid, names_valid), batch_size=args.batch_size,
                                 shuffle=False, num_workers=args.num_workers, pin_memory=True)
 
-    # scheduler = torch.optim.lr_scheduler.CyclicLR(optimizer, base_lr=0.00001, max_lr=0.001, step_size_up=args.lr_decay, cycle_momentum=False, mode='triangular2')
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, args.epochs * len(train_loader))
-    # scheduler = None
 
     for epoch in range(start_epoch, args.epochs):
         print('\nEpoch: %d | LR: %.8f' % (epoch + 1, lr_now))
@@ -446,7 +416,6 @@ def train(data_loader, model_pos, criterion, optimizer, lr_init, lr_now, step, d
 def evaluate(data_loader, model_pos, intermediate, ttda=False, kps_left=None, kps_right=None, joints_left=None, joints_right=None):
     batch_time = AverageMeter()
     data_time = AverageMeter()
-    # n_layers = len(model_pos.transformer_encoder.encoder.layer_stack)
     n_layers = len(model_pos.layer_stack)
     if intermediate:
         epoch_loss_3d_pos = [AverageMeter() for _ in range(n_layers)]
@@ -478,41 +447,7 @@ def evaluate(data_loader, model_pos, intermediate, ttda=False, kps_left=None, kp
 
         if intermediate:
             out, _, _ = model_pos(inputs_2d, input_image)
-            # import matplotlib.pyplot as plt
-            # from mpl_toolkits.axes_grid1 import AxesGrid
-            # fig = plt.figure(figsize=(8*5, 4*5))
-            # out, _, _, attn = model_pos(inputs_2d, input_image, True)
-            # attn = [torch.mean(a, dim=0) for a in attn]
-            # # attn = [a[0] for a in attn]
-            # vals = []
-            # for k, attention in enumerate(attn):
-            #     for i in range(8):
-            #         atm = attention[i]
-            #         atm = atm - torch.min(atm)
-            #         atm = atm / torch.max(atm)
-            #         atm = atm.cpu().numpy()
-            #         vals += [atm]
-                    
-            # grid = AxesGrid(fig, 111,
-            #     nrows_ncols=(4, 8),
-            #     axes_pad=0.05,
-            #     share_all=True,
-            #     label_mode="L",
-            #     cbar_location="right",
-            #     cbar_mode="single",
-            #     )
-            # for val, ax in zip(vals,grid):
-            #     im = ax.imshow(val, vmin=0, vmax=1)
 
-            # grid.cbar_axes[0].colorbar(im)
-
-            # for cax in grid.cbar_axes:
-            #     cax.toggle_label(False)
-
-            # plt.savefig('lul.png')
-
-            # import pdb
-            # pdb.set_trace()
             if ttda:
                 out_flip, _, _ = model_pos(inputs_2d_flip, input_image)
 
@@ -573,93 +508,6 @@ def evaluate(data_loader, model_pos, intermediate, ttda=False, kps_left=None, kp
         return epoch_loss_3d_pos, epoch_loss_3d_pos_procrustes
     else:
         return epoch_loss_3d_pos.avg, epoch_loss_3d_pos_procrustes.avg
-
-
-def dirichlet_loss(parameters, prior):
-    """
-    Dirichlet conjugate prior to prevent all data to fit into a single kernel.
-
-    Parameters
-    ----------
-    parameters: torch.Tensor
-        The gaussian parameters.
-    prior: torch.Tensor
-        The prior.
-    """
-
-    alpha = parameters[:, -1, :].clamp(1e-8, 1)
-
-    loss = torch.sum((prior - 1) * torch.log(alpha), dim=1)
-    res = -torch.mean(loss)
-
-    return res
-
-
-def mean_log_Gaussian_like(y_true, parameters, c, m):
-    """
-    Mean log Gaussian likelihood distribution.
-
-    y_true: torch.Tensor
-        Ground-truth 3d pose.
-    parameters: torch.Tensor
-        The gaussian parameters.
-    c: int
-        Number of features.
-    m: int
-        Number of models.
-    """
-
-    mu = parameters[:, :-2, :]  # [B, 16*3, 5]
-    sigma = parameters[:, -2, :].clamp(1e-2, 1e15)  # [B, 5]
-    alpha = parameters[:, -1, :].clamp(1e-8, 1)  # [B, 5]
-    y_true = y_true.reshape(y_true.shape[0], -1, 1)  # [B, 16*3, 1]
-
-    # import pdb
-    # pdb.set_trace()
-    # res = torch.nn.functional.gaussian_nll_loss(mu, y_true.repeat(1,1,5), sigma.unsqueeze(1).repeat(1, 48, 1), full=True)
-
-
-    # res = 0.5 * c * np.log(2 * np.pi) + 0.5 * torch.sum(torch.log(alpha) + torch.log(sigma) + torch.sum((y_true - mu) ** 2, dim=1) / sigma, dim=1)
-    # res = torch.mean(res)
-
-
-    # # Same as the tensorflow implementation, but gives NaNs.
-    # exponent = torch.log(alpha) - 0.5 * c * np.log(2 * np.pi) - c * torch.log(sigma) - torch.sum((y_true - mu) ** 2, dim=1) / (2. * torch.pow(sigma, 2))
-    # log_gauss = torch.logsumexp(exponent, dim=1)
-    # res = -torch.mean(log_gauss)
-
-
-    # Same as the tensorflow implementation, but gives NaNs.
-    exponent = torch.log(alpha)
-    exponent -= 0.5 * c * np.log(2 * np.pi) 
-    exponent -= c * torch.log(sigma) 
-    exp_sum = torch.sum((y_true - mu) ** 2, dim=1)
-    exp_sum = exp_sum / (2. * sigma ** 2)
-    exponent -= exp_sum
-    log_gauss = torch.logsumexp(exponent, dim=1)
-    res = -torch.mean(log_gauss)
-
-
-    # # This one should be correct, except maybe for the scaling with c.
-    # exponent = torch.log(alpha) - torch.log(sigma) - torch.sum((y_true - mu) ** 2, dim=1) / (2. * sigma ** 2)
-    # log_gauss = torch.logsumexp(exponent, dim=1) - 0.5 * c * math.log(2 * math.pi)
-    # res = -torch.mean(log_gauss)
-
-
-    # oneover2pi = 1. / (2 * np.pi ** (0.5 * c) * sigma ** (c / 3))
-    # exponent = torch.log(alpha) * (torch.log(oneover2pi) * -((torch.norm(y_true - mu, dim=1) ** 2) / (2 * sigma ** 2)))
-    # log_gauss = torch.logsumexp(exponent, dim=1)
-    # res = -torch.mean(log_gauss)
-
-
-    # sigma = sigma.unsqueeze(1)
-    # res = 1.0 / np.sqrt(2 * np.pi) * torch.exp(-0.5 * ((y_true - mu) / sigma)**2) / sigma
-    # res = torch.prod(res, 1)
-    # prob = alpha * res
-    # nll = -torch.log(torch.sum(prob, dim=1))
-    # res = torch.mean(nll)
-
-    return res
 
 
 if __name__ == '__main__':

@@ -81,6 +81,7 @@ def parse_args():
     parser.set_defaults(augment=False)
     parser.add_argument('--embedding_type', dest='embedding_type', type=str, default='conv', help='Embedding type for the joints.')
     parser.add_argument('--d_inner', default=512, type=int, help='num of hidden dimensions in feed forward')
+    parser.add_argument('--pose_weights', type=str, help='Path to the pretrained jointformer model weights.', required=True)
 
     # Experimental
     parser.add_argument('--downsample', default=1, type=int, metavar='FACTOR', help='downsample frame rate by factor')
@@ -172,24 +173,14 @@ def train_worker(rank, addr, port, args):
     p_dropout = args.dropout
     adj = adj_mx_from_skeleton(dataset.skeleton())
     attn_mask = adj.unsqueeze(0).cuda() if args.joint_mask else None
-    # model_pos = SemGCN(adj, args.hid_dim, num_layers=args.num_layers, p_dropout=p_dropout,
-    #                    nodes_group=dataset.skeleton().joints_group() if args.non_local else None).cuda()
-    # model_pos = LiftFormer(16, 2, t_nlayers=args.num_layers, dropout=p_dropout, t_nhid=args.hid_dim, intermediate=args.intermediate, 
-    #                        spatial_encoding=args.spatial_encoding, conv_enc=args.conv_enc, conv_dec=args.conv_dec, attn_mask=attn_mask,
-    #                        pred_dropout=args.pred_dropout, use_images=use_images).cuda()
     model_pos = JointTransformer(num_joints_in=17, n_layers=4, encoder_dropout=0, d_model=64, intermediate=True,
                             spatial_encoding=False, pred_dropout=0.2, embedding_type='conv', adj=adj).cuda()
     if args.keypoints == 'gt':
         print('==> Loading pretrained GT weights.')
-        # ckpt = torch.load('checkpoint/gt/Transformer/best/2021-05-27-22-24-02/ckpt_best.pth.tar')
-        # ckpt = torch.load('checkpoint/17joints/gt/base/2021-06-10-13-05-42/ckpt_best.pth.tar')
-        ckpt = torch.load('checkpoint/17joints/gt/base/ResConnections/2021-06-14-14-23-38/ckpt_best.pth.tar')
-        # ckpt = torch.load('checkpoint/coco/2022-01-14-02-02-27/ckpt_best.pth.tar')
+        ckpt = torch.load(args.pose_weights)
     else:
         print('==> Loading pretrained CPN weights.')
-        # ckpt = torch.load('checkpoint/17joints/cpn/base/ResConnections/2021-06-14-10-17-38/ckpt_best.pth.tar')
-        # ckpt = torch.load('checkpoint/17joints/cpn/base/ResConnections/2021-06-14-10-17-38/ckpt_best.pth.tar')
-        ckpt = torch.load('checkpoint/coco/base/ckpt_best.pth.tar')
+        ckpt = torch.load(args.pose_weights)
     model_pos.load_state_dict(ckpt['state_dict'])
     model_refine = ErrorRefinement(num_joints_in=17, n_layers=args.num_layers, d_model=args.hid_dim, encoder_dropout=p_dropout, pred_dropout=args.pred_dropout, 
                                    spatial_encoding=args.spatial_encoding, intermediate=args.intermediate, d_inner=args.d_inner).cuda()
@@ -201,12 +192,7 @@ def train_worker(rank, addr, port, args):
         print("==> Total parameters pose refinement: {:.2f}M".format(sum(p.numel() for p in model_refine.parameters()) / 1000000.0))
 
     criterion = nn.MSELoss(reduction='mean').cuda()
-    # optimizer = torch.optim.Adam(model_pos.parameters(), lr=args.lr)
     optimizer = torch.optim.AdamW(model_refine.parameters(), lr=args.lr)
-    # optimizer = torch.optim.AdamW([
-    #     {'params': model_refine.parameters()},
-    #     {'params': model_pos.parameters(), 'lr': 0.0001}
-    # ], lr=args.lr)
 
     # Optionally resume from a checkpoint
     if args.resume or args.evaluate:
@@ -227,9 +213,6 @@ def train_worker(rank, addr, port, args):
             if rank == 0:
                 print("==> Loaded checkpoint (Epoch: {} | Error: {})".format(start_epoch, error_best))
 
-            # if args.resume:
-            #     ckpt_dir_path = path.dirname(ckpt_path)
-            #     logger = Logger(path.join(ckpt_dir_path, 'log.txt'), resume=True)
             ckpt_dir_path = path.join(args.checkpoint, datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S"))
 
             if not path.exists(ckpt_dir_path) and rank == 0 and not args.evaluate:
@@ -280,7 +263,6 @@ def train_worker(rank, addr, port, args):
                                       batch_size=args.batch_size, shuffle=False,
                                       num_workers=args.num_workers, pin_memory=True)
             error1, error2 = evaluate(valid_loader, model_pos, model_refine, intermediate=args.intermediate, ttda=True, kps_left=kps_left, kps_right=kps_right, joints_left=joints_left, joints_right=joints_right)
-            # errors_p1[i], errors_p2[i] = evaluate(valid_loader, model_pos, intermediate=args.intermediate)
             if args.intermediate:
                 errors_p1[i] = error1[-1].avg
                 errors_p2[i] = error2[-1].avg
@@ -307,9 +289,7 @@ def train_worker(rank, addr, port, args):
         valid_loader = DataLoader(PoseGenerator(poses_valid, poses_valid_2d, actions_valid, names_valid), batch_size=args.batch_size,
                                 shuffle=False, num_workers=args.num_workers, pin_memory=True)
 
-    # scheduler = torch.optim.lr_scheduler.CyclicLR(optimizer, base_lr=0.00001, max_lr=0.001, step_size_up=args.lr_decay, cycle_momentum=False, mode='triangular2')
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, args.epochs * len(train_loader))
-    # scheduler = None
 
     for epoch in range(start_epoch, args.epochs):
         print('\nEpoch: %d | LR: %.8f' % (epoch + 1, lr_now))
@@ -399,9 +379,7 @@ def train(data_loader, model_pos, model_refine, criterion, optimizer, lr_init, l
         error_3d = error_3d[-1]
         refine_in = torch.cat([inputs_2d, pred_3d, error_3d], dim=2)
         out = model_refine(refine_in)
-        # true_error = torch.abs(outputs_3d.detach() - targets_3d)
         
-        # loss_3d_pos = (criterion(outputs_3d, targets_3d) + criterion(error_3d, true_error)) / 2
         if intermediate:
             loss_3d_pos = 0
             for outputs_3d in out:
@@ -436,7 +414,6 @@ def train(data_loader, model_pos, model_refine, criterion, optimizer, lr_init, l
 def evaluate(data_loader, model_pos, model_refine, intermediate, ttda=False, kps_left=None, kps_right=None, joints_left=None, joints_right=None):
     batch_time = AverageMeter()
     data_time = AverageMeter()
-    # n_layers = len(model_pos.transformer_encoder.encoder.layer_stack)
     n_layers = len(model_refine.layer_stack)
     if intermediate:
         epoch_loss_3d_pos = [AverageMeter() for _ in range(n_layers)]
@@ -543,93 +520,6 @@ def evaluate(data_loader, model_pos, model_refine, intermediate, ttda=False, kps
         return epoch_loss_3d_pos, epoch_loss_3d_pos_procrustes
     else:
         return epoch_loss_3d_pos.avg, epoch_loss_3d_pos_procrustes.avg
-
-
-def dirichlet_loss(parameters, prior):
-    """
-    Dirichlet conjugate prior to prevent all data to fit into a single kernel.
-
-    Parameters
-    ----------
-    parameters: torch.Tensor
-        The gaussian parameters.
-    prior: torch.Tensor
-        The prior.
-    """
-
-    alpha = parameters[:, -1, :].clamp(1e-8, 1)
-
-    loss = torch.sum((prior - 1) * torch.log(alpha), dim=1)
-    res = -torch.mean(loss)
-
-    return res
-
-
-def mean_log_Gaussian_like(y_true, parameters, c, m):
-    """
-    Mean log Gaussian likelihood distribution.
-
-    y_true: torch.Tensor
-        Ground-truth 3d pose.
-    parameters: torch.Tensor
-        The gaussian parameters.
-    c: int
-        Number of features.
-    m: int
-        Number of models.
-    """
-
-    mu = parameters[:, :-2, :]  # [B, 16*3, 5]
-    sigma = parameters[:, -2, :].clamp(1e-2, 1e15)  # [B, 5]
-    alpha = parameters[:, -1, :].clamp(1e-8, 1)  # [B, 5]
-    y_true = y_true.reshape(y_true.shape[0], -1, 1)  # [B, 16*3, 1]
-
-    # import pdb
-    # pdb.set_trace()
-    # res = torch.nn.functional.gaussian_nll_loss(mu, y_true.repeat(1,1,5), sigma.unsqueeze(1).repeat(1, 48, 1), full=True)
-
-
-    # res = 0.5 * c * np.log(2 * np.pi) + 0.5 * torch.sum(torch.log(alpha) + torch.log(sigma) + torch.sum((y_true - mu) ** 2, dim=1) / sigma, dim=1)
-    # res = torch.mean(res)
-
-
-    # # Same as the tensorflow implementation, but gives NaNs.
-    # exponent = torch.log(alpha) - 0.5 * c * np.log(2 * np.pi) - c * torch.log(sigma) - torch.sum((y_true - mu) ** 2, dim=1) / (2. * torch.pow(sigma, 2))
-    # log_gauss = torch.logsumexp(exponent, dim=1)
-    # res = -torch.mean(log_gauss)
-
-
-    # Same as the tensorflow implementation, but gives NaNs.
-    exponent = torch.log(alpha)
-    exponent -= 0.5 * c * np.log(2 * np.pi) 
-    exponent -= c * torch.log(sigma) 
-    exp_sum = torch.sum((y_true - mu) ** 2, dim=1)
-    exp_sum = exp_sum / (2. * sigma ** 2)
-    exponent -= exp_sum
-    log_gauss = torch.logsumexp(exponent, dim=1)
-    res = -torch.mean(log_gauss)
-
-
-    # # This one should be correct, except maybe for the scaling with c.
-    # exponent = torch.log(alpha) - torch.log(sigma) - torch.sum((y_true - mu) ** 2, dim=1) / (2. * sigma ** 2)
-    # log_gauss = torch.logsumexp(exponent, dim=1) - 0.5 * c * math.log(2 * math.pi)
-    # res = -torch.mean(log_gauss)
-
-
-    # oneover2pi = 1. / (2 * np.pi ** (0.5 * c) * sigma ** (c / 3))
-    # exponent = torch.log(alpha) * (torch.log(oneover2pi) * -((torch.norm(y_true - mu, dim=1) ** 2) / (2 * sigma ** 2)))
-    # log_gauss = torch.logsumexp(exponent, dim=1)
-    # res = -torch.mean(log_gauss)
-
-
-    # sigma = sigma.unsqueeze(1)
-    # res = 1.0 / np.sqrt(2 * np.pi) * torch.exp(-0.5 * ((y_true - mu) / sigma)**2) / sigma
-    # res = torch.prod(res, 1)
-    # prob = alpha * res
-    # nll = -torch.log(torch.sum(prob, dim=1))
-    # res = torch.mean(nll)
-
-    return res
 
 
 if __name__ == '__main__':
