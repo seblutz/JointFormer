@@ -1,6 +1,6 @@
 # JointFormer
 
-This repository is based on the SemGCN repository.
+This is the official repository of our paper [Jointformer: Single-Frame Lifting Transformer with Error Prediction and Refinement for 3D Human Pose Estimation](https://arxiv.org/abs/2208.03704) published at ICPR2022. This repository is based on the [SemGCN](https://github.com/garyzhao/SemGCN) repository. Please refer to their readme or to [VideoPose3D](https://github.com/facebookresearch/VideoPose3D) to setup the training data.
 
 ## Trained weights
 
@@ -18,3 +18,18 @@ Trained weights for the Jointformer on GT keypoints can be found [here](https://
 ```
 python run_jointformer.py --batch_size 256 --num_workers 2 --epochs 50 --keypoints gt --hid_dim 64 --intermediate --pred_dropout 0.2 --augment  
 ```
+
+To evaluate our trained weights and generate the evaluation values in the tables of the paper, please append `--evaluate {path/to/weights}` to the respective training commands.
+
+## Bibtex
+```
+@article{lutz2021joint,
+  title={Jointformer: Single-Frame Lifting Transformer with Error Prediction and Refinement for 3D Human Pose Estimation},
+  author={Lutz, Sebastian and Blythman, Richard and Ghostal, Koustav and Moynihan Matthew and Simms, Ciaran and Smolic, Aljosa}
+  journal={26TH International Conference on Pattern Recognition, {ICPR} 2022},
+  year={2022}
+}
+```
+
+## Acknowledgements
+This repository is based on [SemGCN](https://github.com/garyzhao/SemGCN) and [VideoPose3D](https://github.com/facebookresearch/VideoPose3D). We thank their authors for releasing their code.
